@@ -26,10 +26,6 @@ int my_main(int argc, char** argv, char** envp) {
   VmEmulator::getInstance();
   selfmap::getInstance();
 
-  // test code
-  void* address = (void*)0x40085e;
-  SetBreakpoint(address, getpid(), NULL);
-
   return real_main(argc, argv, envp);
 }
 
