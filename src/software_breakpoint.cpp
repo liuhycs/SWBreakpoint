@@ -65,7 +65,7 @@ void SoftwareBreakpoint::SetBreakpoint(void* addr, pid_t thread_id, callback_sa_
   pthread_spin_lock(&lock_);
   do{
     int bp_idx = __atomic_add_fetch(&breakpoint_index, 1, __ATOMIC_RELAXED);
-    bp_idx &= ~(BREAKPOINT_MAX_SIZE-1); 
+    bp_idx &= (BREAKPOINT_MAX_SIZE-1); 
     bp = &bp_[bp_idx];
   } while (bp->addr != NULL);
 

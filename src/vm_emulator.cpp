@@ -29,7 +29,11 @@ void* VmEmulator::ExecuteInstruction(breakpoint_t* bp, void* context) {
     xed_iclass_enum_t xiclass = xed_decoded_inst_get_iclass(xptr);
 
     operand_t operands[OPERAND_NUMBER];
-    xed_uint64_t rel_address =  (xed_uint64_t)((intptr_t)bp->addr - bp->text_mapping->getBase());
+    xed_uint64_t rel_address =  (xed_uint64_t)bp->addr;
+    bool isapp = selfmap::getInstance().isApplication((void*)bp->text_mapping->getBase());
+    if(!isapp) { 
+      rel_address =  (xed_uint64_t)((intptr_t)bp->addr - bp->text_mapping->getBase());
+    }
     ParseOperands(xptr, rel_address, operands, OPERAND_NUMBER, context);
 
     next_instruction =  (void*)((intptr_t)bp->addr + bp->inst_length);
@@ -546,10 +550,10 @@ void* VmEmulator::ExecuteInstruction(breakpoint_t* bp, void* context) {
             if(isjump) {
               size_t target = GetOperandValue(&operands[0]);
               // far jump
-              if(xed3_operand_get_nominal_opcode(xptr) == 0xFF){
-                next_instruction = (void*)target;
-              } else {
-                next_instruction = (void*)(bp->text_mapping->getBase() + target);
+              next_instruction = (void*)target;
+              if(xed3_operand_get_nominal_opcode(xptr) != 0xFF && 
+                  !isapp) { 
+                  next_instruction = (void*)(bp->text_mapping->getBase() + target);
               }
             }
 
