@@ -217,6 +217,9 @@ void* VmEmulator::ExecuteInstruction(breakpoint_t* bp, void* context) {
           break;
         }
         /* assignment instruction  */
+      case XED_ICLASS_LEA: 
+      // Move with Zero-Extend
+      case XED_ICLASS_MOVZX:
       case XED_ICLASS_MOV: 
         {
           // format: move dest src
@@ -242,6 +245,70 @@ void* VmEmulator::ExecuteInstruction(breakpoint_t* bp, void* context) {
             SetValueToMemory((void*)dest->value, dest->size, src_value);
           }
 
+          break;
+        }
+      // Move with Sign-Extension
+      case XED_ICLASS_MOVSXD:
+      case XED_ICLASS_MOVSX:
+        {
+          // format: move dest(register) src
+          operand_t* src = &operands[1];
+          size_t src_value = GetOperandValue(src);
+          size_t sign_mask = 1UL << (src->size*sizeof(size_t) - 1);
+          bool sign_flag = src_value & sign_mask;
+          if(sign_flag) src_value &= 0xFFFFFFFFFFFFFFFF;
+
+          operand_t* dest = &operands[0];
+          if(dest->type == OPERAND_TYPE_REGISTER) {
+            size_t dest_mask = GetRegisterMask(dest);
+
+            int reg_enum = reg_mapping[dest->name];
+            if(reg_enum >= REG_R8 && reg_enum <= REG_RIP){ 
+              size_t orig_value;
+              if(Is32BitRegister(dest)) {
+                orig_value = dest->value & 0xFFFFFFFF;
+              } else {
+                orig_value = dest->value;
+              }
+              size_t new_value = (src_value & dest_mask) | (orig_value & ~dest_mask);
+              SET_REG_VALUE(context, reg_enum, new_value); 
+            }
+          } 
+          else {
+            fprintf(stderr, "The operand of MOVSX is invalid!!!\n");
+          }
+
+          break;
+        }
+      case XED_ICLASS_POP:
+        {
+          operand_t* dest = &operands[0];
+          if(dest->type == OPERAND_TYPE_REGISTER) {
+            int reg_enum = reg_mapping[dest->name];
+            if(reg_enum >= REG_R8 && reg_enum <= REG_RIP){ 
+              size_t orig_value = dest->value;
+              // the size of the stack pointer is always 64 bits.
+              int register_size = 8;
+              if(dest->name >= XED_REG_AX && dest->name <= XED_REG_R15W) {
+                register_size = 2;
+              }
+              size_t rsp_pointer = GET_REG_VALUE(context, REG_RSP);
+              size_t new_value = *(size_t*)rsp_pointer;
+              if(register_size == 2) {
+                new_value &= 0xFFFF;
+                orig_value &= ~0xFFFF;
+                new_value |= orig_value;
+              }
+              SET_REG_VALUE(context, reg_enum, new_value); 
+              // set the new value
+              rsp_pointer += register_size;
+              SET_REG_VALUE(context, REG_RSP, rsp_pointer); 
+            } else {
+              fprintf(stderr, "POP %d is not supported currently\n", dest->name);
+            }
+          } else {
+            fprintf(stderr, "POP m64/m16 is not supported currently\n");
+          }
           break;
         }
         // Move Data After Swapping Bytes
@@ -376,7 +443,10 @@ void* VmEmulator::ExecuteInstruction(breakpoint_t* bp, void* context) {
                   isexec = zf_mask & flags;
                   break;
                 }
-              default:{}
+              default:
+                {
+                  fprintf(stderr, "Condition move %d is not supported\n", xiclass);
+                }
             }
 
             if(isexec) {
@@ -560,6 +630,7 @@ void* VmEmulator::ExecuteInstruction(breakpoint_t* bp, void* context) {
           }
           else {
             fprintf(stderr, "Not support instruction %d\n", xiclass);
+            exit(-1);
           }
         }
     }
@@ -634,7 +705,8 @@ size_t VmEmulator::GetOperandValue(operand_t* operand) {
     // if this is the last word of current mapping, it could be a SEGV
     op_value = *(size_t*)operand->value;
     // get right value based on size
-    op_value >>= (8*(sizeof(size_t)-operand->size));
+    // FIXME Little Endian !!! 
+    op_value &= (0xFFFFFFFFFFFFFFFF >> ((8-operand->size)*sizeof(size_t)));
   } else if(operand->type == OPERAND_TYPE_REGISTER) {
     size_t mask = GetRegisterMask(operand);
     op_value &= mask;
@@ -690,6 +762,10 @@ void VmEmulator::ParseOperands(xed_decoded_inst_t *xptr, xed_uint64_t rel_addres
 
           xed_int64_t disp = xed_operand_values_get_memory_displacement_int64(ov);
           xed_uint_t bytes = xed_decoded_inst_operand_length_bits(xptr, i)>>3;
+
+          // FIXME segment register
+          //size_t segment_register;
+          //asm volatile("mov %%fs, %[Var]" : [Var] "=r" (segment_register));
 
           if(base != XED_REG_INVALID) {
             int reg_enum = reg_mapping[base];
@@ -795,7 +871,7 @@ void VmEmulator::ParseOperands(xed_decoded_inst_t *xptr, xed_uint64_t rel_addres
               }
               operands[real_noperands].name = r;
               operands[real_noperands].value = val;
-              operands[real_noperands].size = 8;
+              operands[real_noperands].size = xed_decoded_inst_operand_length(xptr, i);
             }
 
           } else {
@@ -821,7 +897,14 @@ bool VmEmulator::GetInstructionInformation(breakpoint_t* bp) {
   if(xed_error == XED_ERROR_NONE){ 
     bp->inst_length = xed_decoded_inst_get_length(xptr);
     // backup original data
-    memcpy(bp->inst_data, bp->addr, bp->inst_length);
+    int length = bp->inst_length;
+    char* dest = bp->inst_data;
+    char* src = (char*)(bp->addr);
+    for(int i=0; i<length; i++) {
+      dest[i] = src[i];
+    }
+    // TRY to avoid functions from other library 
+    //memcpy(bp->inst_data, bp->addr, bp->inst_length);
     ret = true;
   }
 
